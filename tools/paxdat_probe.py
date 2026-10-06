@@ -6,7 +6,7 @@ asserting every class/version marker it expects, and fails loudly on the first
 byte that doesn't match the current hypothesis (see docs/FORMAT.md).
 Field names prefixed with `u_` are not yet understood.
 
-Usage: paxdat_probe.py <project_dir> [--dump]
+Usage: paxdat_probe.py <project_dir | sd_root_with_settings.dat> [--dump]
 """
 import json
 import struct
@@ -56,11 +56,16 @@ class Reader:
         return s
 
     def tag(self, cls, ver):
-        """Object header: class id byte, then version stored as 0x30 + n."""
-        c, v = self.d[self.p], self.d[self.p + 1] if self.p + 1 < len(self.d) else None
-        if c != cls or v != 0x30 + ver:
-            self.fail(f"expected tag {cls:02x} v{ver} ({cls:02x} {0x30 + ver:02x})")
+        """Object header: class id byte, then version stored as 0x30 + n.
+        `ver` may be an int or a tuple of accepted versions; returns the version."""
+        accepted = ver if isinstance(ver, tuple) else (ver,)
+        c = self.d[self.p] if self.p < len(self.d) else None
+        v = self.d[self.p + 1] - 0x30 if self.p + 1 < len(self.d) else None
+        if c != cls or v not in accepted:
+            want = "/".join(f"v{a}" for a in accepted)
+            self.fail(f"expected tag {cls:02x} {want}")
         self.p += 2
+        return v
 
     def peek_tag(self):
         return self.d[self.p], self.d[self.p + 1] - 0x30
@@ -84,7 +89,12 @@ class Reader:
 # Widths of the 16 `0e 31` values in the per-track settings block (tag 2b v3).
 TRACK_SETTING_WIDTHS = [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1]
 
-FX_TYPES = {0: "mod_depth", 1: "arp", 2: "chance", 3: "euclid", 9: "groove",
+# Names inferred from each effect's parameter names; see FORMAT.md.
+FX_TYPES = {0: "mod_depth", 1: "arp", 2: "chance", 3: "euclid",
+            4: "filter? (NOTE/CC/VELO MIN-MAX, DROP PB/AFT)",
+            5: "harmonizer? (ORIGIN, NOTE 2-8)",
+            7: "randomizer? (NOTE-/+, OCTAVE-/+, VELO-/+)",
+            9: "groove", 0x0C: "echo? (REPEATS, VOICES, curves)",
             0x12: "unknown_0x12 (T1-T8/SPEED/LOOP/SHIFT)"}
 
 
@@ -99,12 +109,12 @@ def parse_fx_slot(r):
     while True:
         r.tag(0x18, 4)
         idx = r.u8()
-        body = r.raw(20)
-        name = r.cstr()
-        a, b = struct.unpack_from("<HH", body)
-        p = {"idx": idx, "name": name, "value": a, "u_value2": b}
-        if any(body[4:]):
-            p["u_rest"] = body[4:].hex(" ")
+        p = {"idx": idx, "value": r.u16(), "u_value2": r.u16()}
+        # 16 optional u16 slots (presence byte each); probably per-pattern values.
+        slots = [r.u16() if r.u8() else None for _ in range(16)]
+        if any(v is not None for v in slots):
+            p["slots"] = slots
+        p["name"] = r.cstr()
         params.append(p)
         if idx == 0xFF:  # ON/OFF param terminates the list
             break
@@ -114,8 +124,17 @@ def parse_fx_slot(r):
         fx["mod_routes"] = []
         for _ in range(4):
             r.tag(0x11, 3)
-            u0 = r.u8()
-            fx["mod_routes"].append({"u0": u0, "u_f32": r.f32(), "u_rest": r.raw(5).hex(" ")})
+            route = {}
+            if r.u8():
+                r.tag(0x15, 1)
+                route["source"] = r.raw(8).hex(" ")
+            if r.u8():
+                r.tag(0x16, 1)
+                route["target"] = r.raw(8).hex(" ")
+            route["depth_f32"] = r.f32()
+            route["u_a"] = r.u16()
+            route["u_b"] = r.u16()
+            fx["mod_routes"].append(route)
     return fx
 
 
@@ -124,7 +143,7 @@ def parse_track(r, i):
     if r.u8() != i:
         r.p -= 1
         r.fail(f"expected track index {i}")
-    r.tag(0x0C, 18)
+    t["version"] = r.tag(0x0C, (18, 19))  # 18 = OS 3.10, 19 = OS 3.22
     t["u_a"] = r.val()
     t["u_b"] = r.raw(3).hex(" ")
 
@@ -134,7 +153,13 @@ def parse_track(r, i):
 
     r.tag(0x2B, 3)
     t["u_c"] = r.val()
-    t["u_d"] = r.raw(13).hex(" ")
+    t["u_d"] = r.raw(9).hex(" ")
+    # 0/1 usually; 2 carries an extra u32 + u8 (input routing? see FORMAT.md)
+    t["u_in_mode"] = r.u32()
+    if t["u_in_mode"] == 2:
+        t["u_in_extra"] = (r.u32(), r.u8())
+    elif t["u_in_mode"] > 2:
+        r.fail(f"unseen in_mode {t['u_in_mode']}")
     t["settings"] = [r.val(w) for w in TRACK_SETTING_WIDTHS]
 
     t["index_again"] = r.u8()
@@ -182,6 +207,11 @@ def parse_track(r, i):
     for _ in range(8):
         r.tag(0x2A, 1)
         t["u_m"].append(r.u8())
+    if t["version"] >= 19:  # OS 3.22 appends one more value (u32 or val8 + 3 bytes?)
+        t["u_v19_tail"] = r.raw(6).hex(" ")
+        if t["u_v19_tail"][:5] != "0e 31":
+            r.p -= 6
+            r.fail("expected 0e 31 at v19 track tail")
     return t
 
 
@@ -195,9 +225,18 @@ def parse_project(data):
     out["tracks"] = [parse_track(r, i) for i in range(16)]
     out["track_order?"] = list(r.raw(16))
     r.tag(0x1C, 1)
-    out["u_1c"] = r.u32()
+    out["sections"] = []
+    for _ in range(r.u32()):
+        sec = {"u_index?": r.u8()}
+        r.tag(0x1B, 3)
+        sec["name"] = r.cstr()
+        sec["pattern_per_track?"] = list(r.raw(16))
+        out["sections"].append(sec)
     r.tag(0x1E, 1)
-    out["u_1e"] = r.u32()
+    out["song"] = []
+    for _ in range(r.u32()):
+        r.tag(0x1D, 1)
+        out["song"].append({"section?": r.u8(), "length?": r.u16()})
     out["u_24"] = []
     for _ in range(2):
         r.tag(0x24, 2)
@@ -250,8 +289,7 @@ def parse_autom(data):
             r.tag(0x2E, 2)
             r.tag(0x16, 1)
             lane["target"] = r.raw(8).hex(" ")
-            lane["u_flag"] = r.u8()
-            lane["u_val"] = r.u16()
+            lane["u_val"] = r.u16() if r.u8() else None
             lane["patterns"] = []
             # 17 records in the only sample (16 patterns + 1?); unconfirmed.
             for _ in range(17):
@@ -259,8 +297,7 @@ def parse_autom(data):
                 hdr = r.raw(4).hex(" ")
                 pts = [(r.u16(), r.u16()) for _ in range(r.u32())]
                 lane["patterns"].append({"u_hdr": hdr, "points(pos,val)?": pts})
-            lane["u_tail_flag"] = r.u8()
-            lane["u_tail_u16s"] = [r.u16() for _ in range(8)]
+            lane["u_tail_u16s"] = [r.u16() for _ in range(8)] if r.u8() else None
             trk["lanes"].append(lane)
         out["tracks"].append(trk)
     if not r.eof():
@@ -279,6 +316,31 @@ def parse_empty(name, cls):
     return f
 
 
+def parse_settings(data):
+    """Global device settings (lives next to the project folders, not in them)."""
+    r = Reader(data, "settings.dat")
+    r.tag(0x1A, 4)
+    out = {"header_vals": [r.val() for _ in range(9)], "groups": []}
+    while r.peek_tag() == (0x09, 1):
+        r.p += 2
+        out["groups"].append({r.cstr(): r.u32() for _ in range(r.u32())})
+    r.tag(0x21, 4)
+    # Not decoded yet: lists tagged 22 32 with a u32 count but unclear item size.
+    out["u_tail"] = r.raw(len(data) - r.p).hex(" ")
+    return out
+
+
+def parse_autoload(data):
+    """AUTO.LOAD: NUL-terminated name of the project folder to open at boot."""
+    r = Reader(data, "AUTO.LOAD")
+    out = {"project": r.cstr()}
+    if not r.eof():
+        r.fail("unconsumed bytes")
+    return out
+
+
+GLOBAL_PARSERS = {"settings.dat": parse_settings, "AUTO.LOAD": parse_autoload}
+
 PARSERS = {
     "project.dat": parse_project,
     "notes.dat": parse_notes,
@@ -293,7 +355,8 @@ def main():
     dump = "--dump" in sys.argv
     ok = True
     results = {}
-    for name, fn in PARSERS.items():
+    parsers = PARSERS if (root / "project.dat").exists() else GLOBAL_PARSERS
+    for name, fn in parsers.items():
         path = root / name
         if not path.exists():
             continue
