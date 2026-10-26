@@ -46,19 +46,29 @@ was the better path.
 2. **Base address by pointer voting.** Collect every aligned word that looks like
    a flash pointer, then find the base at which the most of them land exactly
    on the start of a string. `0x08020000` scored 2,660 hits; the next best
-   scored 888. So the app is linked at **`0x08020000`**, which leaves the first
-   128 KB of flash for a bootloader.
+   scored 888. So the app is linked at **`0x08020000`**. The first 128 KB flash
+   sector holds the H7's own bootloader, which is **not** part of `hapax.bin`.
 3. **Layout of `hapax.bin`:**
 
    | File offset | Content |
    |---|---|
    | `0x000000–0x172CF8` | application, linked at `0x08020000` |
    | up to `0x1E0000` | `DE AD C0 DE` filler |
-   | `0x1E0000–end` | **second vector table** (SP `0x20018000`, reset `0x0800CC11`): the bootloader, linked at `0x08000000` |
+   | `0x1E0000–end` | **second vector table** (SP `0x20018000`, reset `0x0800CC11`): firmware for a **second, F4-class microcontroller** (see item 4), linked at `0x08000000` |
 
-4. **MCU family.** The bootloader references the flash controller at
-   `0x40023C00`, the STM32F2/F4 address, and SRAM is at `0x2000xxxx`. The source
-   tree's top folder is called `f2`.
+   The file isn't a flash image: placed at `0x08020000`, the tail would run past
+   the end of 2 MB of flash. It's an **update container** that the device's
+   bootloader unpacks. The H7 app never references the tail.
+
+4. **MCU family** (corrected). The app is an **STM32H7 (Cortex-M7)**. It
+   references the H7 RCC (`0x58024400`), the H7 flash controller
+   (`0x52002000`), and AXI SRAM at `0x2400xxxx` (≈ 5,800 references), plus
+   SRAM1–4 at `0x30…`/`0x38…`. The embedded second image uses **F4** peripheral
+   addresses: RCC `0x40023800`, flash controller `0x40023C00`, 96 KB stack top.
+   It's probably a co-processor, for example for the panel or USB host. The
+   source folder name `f2` is a project or board name, not the chip. An earlier
+   version of these notes called the tail image "the bootloader" and the chip
+   "F2/F4"; both were wrong.
 5. **Build information leaks.** There are GCC/newlib paths for two toolchains
    (`arm-13`, `arm-15`) and source paths such as
    `…/Hapax-release-3.22/f2/src/serde/project_save_load.cpp`. These give the
@@ -77,7 +87,8 @@ analyzeHeadless re-work/ghidra_proj hapax \
   -scriptPath tools/re -preScript CortexMSetup.java -postScript ExportAll.java re-work/out
 ```
 
-- `CortexMSetup.java` adds the SRAM, CCM, peripheral and SCS memory blocks, sets
+- `CortexMSetup.java` adds the H7 memory blocks (DTCM, AXI SRAM, SRAM1–4,
+  peripherals, SCS; fixed after the first pass used an F4-style map), sets
   Thumb mode, creates a function for each of 149 vector handlers, and enables
   the aggressive instruction finder.
 - `ExportAll.java` writes pseudo-C for all 4,302 functions plus a string index
@@ -177,17 +188,18 @@ class-byte write followed by a version-byte write), then spot-checked by hand.
 
 ## 6. Firmware-modification outlook (preliminary)
 
-- The app and bootloader are plain, unencrypted Thumb code.
-- Neither image references the STM32 CRC unit, a CRC32 table, or SHA-256
-  constants. That suggests updates aren't signature-checked, **but this is not
-  established yet**. The bootloader's update path hasn't been analysed: how
-  `hapax.bin` reaches it, and why the bootloader is carried at the end of the file.
+- The H7 app and the co-processor image are plain, unencrypted Thumb code.
+- **Integrity checking is unknown.** The code that unpacks `hapax.bin` and
+  would check it is the H7 bootloader, which isn't in the update file. Neither
+  image contains obvious CRC32 or SHA-256 constants, but that says nothing
+  about the bootloader. (An earlier version of these notes drew a conclusion
+  from the wrong image.)
 - Before any modification:
-  - analyse the bootloader;
-  - find a recovery path (STM32 ROM DFU through BOOT0, or SWD);
+  - obtain or dump the H7 bootloader (SWD, if the board exposes it);
+  - confirm a recovery path (STM32H7 ROM DFU through BOOT0, or SWD);
   - keep the stock image.
 
-  A bricked bootloader can't be fixed over USB/SD.
+  Don't patch the co-processor image without knowing how it gets flashed.
 
 ## 7. Working loop (for learning)
 
@@ -204,12 +216,27 @@ class-byte write followed by a version-byte write), then spot-checked by hand.
 5. **Read packed structs from shifts.** `(x << 0x1c) >> 0x1d` means a 3-bit
    field at bit 1. Bit widths tell you legal ranges.
 
-## 8. Open firmware questions
+## 8. Results from the second firmware pass 🔧
+
+| Topic | Finding | How |
+|---|---|---|
+| FX type ids | `0` ModMatrix, `1` Arp, `2` Chance, `3` Euclid, `4` Filter, `5` Harmonizer, `6` LFO, `7` Randomizer, `8` Scaler, `9` Swing, `0x0A` Envelope, `0x0B` Output, `0x0C` Echo, `0x0E` Register, `0x10` Shaper, `0x11` Mono, `0x12` Arpoly, `0x13` Spring. `0x0D` and `0x0F` aren't constructible (hidden `__COLLECT` / `__MUTATE`?) | the effect factory `switch(type)`, matched to each constructor's parameter names |
+| Automation / target type (`16` byte 0) | `0` CC, `4` poly aftertouch, `5` channel aftertouch, `6` pitch bend (14-bit), `8` program change; `3` = FX parameter (from samples) | MIDI-file exporter: the type → status byte switch |
+| Note payload | position includes µTime; byte 6 = note-off velocity; bytes 11–12 = length in ticks; byte 9 = Math index; pitch bit 7 = skip flag | MIDI-file exporter + string tables |
+| Math enum | 0 `PB <5` … 22 `FILL`, **23 `OFF`**, 24 `1:2` … (`X:Y`, then `! X:Y`), then `NO FX` variants | `{len, ptr}` string table, matched to the loader default `0x17` |
+| Roll enum | 0 `OFF`, 1 `1/8`, 1/12, 1/16, 1/24, 1/32, 1/48, 1/64, 1/96, 1/128, 10 `1/256` | `{len, ptr}` string table plus a matching tick-interval table |
+| Mod sources (UI order) | `FILL, CV IN 1, CV IN 2, LFO A, LFO B, AFTERTOUCH, PITCHBEND, PC, KEYTRACKING, VELOCITY` (+ CC) | string-pointer table |
+| Destination kinds (UI order) | `CC, PITCHBEND, AFTERTOUCH, CV IN, CV OUT, PROG CHANGE, KEYTRACKING, VELOCITY, FILL, PROJECT LFO, NRPN, CC PAIR` | string-pointer table |
+| `drums.dat` | same nesting as `notes.dat`; event lists are class `02 v2`: u32 count, `{u16 position, u8[10] payload}` (no `08` type byte) | drum serializer |
+| `mpe.dat` | class `27 v1` lists; each MPE note: `08`, u16 position, then `29 v1` = payload + 3 expression curves | MPE serializer/deserializer |
+| Capacity | notes, events and MPE points come from growable pools in one shared RAM arena ("MEMORY FULL", "MEMORY FULL - MPE", "MPE REC LIMIT"). There are no fixed per-type counts | pool accessors and the grow function |
+
+## 9. Open firmware questions
 
 | Question | Where to look |
 |---|---|
-| Note payload bit layout (10 bytes, raw `memcpy`) | Setters in the step-edit UI; MIDI-file exporter (`utils/midi_file_export.cpp`); the sequencer's note-on path |
+| Remaining note bytes: 3 (flags beyond bit 0), 7, and confirming roll at byte 10 | Step-edit setters; the sequencer's roll scheduling |
 | Meaning of each track field at `@0x18…@0x4a` | The track-settings UI, where each menu label leads to its offset |
-| Enum tables (output type, port kinds, FX type ids) | UI string tables next to the code that indexes them |
-| Capacity limits for notes, automation points and MPE | "MEMORY FULL" / "LOW MEMORY" paths, pool initialisation |
-| Bootloader update path and integrity checks | Carved bootloader image (`re-work/carved/boot_0x08000000.bin`) |
+| Remaining enums: output type, port kinds, mod-source numbering, scales | UI string tables next to the code that indexes them |
+| Size of the shared arena, for an editor-side memory estimate | Arena initialisation (`0x2403e0xx` pools) |
+| Update path and integrity checks | The H7 bootloader (not in `hapax.bin`; needs a flash dump). The co-processor image (`re-work/carved/boot_0x08000000.bin`, misnamed) |

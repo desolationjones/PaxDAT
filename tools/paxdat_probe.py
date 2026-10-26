@@ -89,13 +89,14 @@ class Reader:
 # Widths of the 16 `0e 31` values in the per-track settings block (tag 2b v3).
 TRACK_SETTING_WIDTHS = [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 1]
 
-# Names inferred from each effect's parameter names; see FORMAT.md.
-FX_TYPES = {0: "mod_depth", 1: "arp", 2: "chance", 3: "euclid",
-            4: "filter? (NOTE/CC/VELO MIN-MAX, DROP PB/AFT)",
-            5: "harmonizer? (ORIGIN, NOTE 2-8)",
-            7: "randomizer? (NOTE-/+, OCTAVE-/+, VELO-/+)",
-            9: "groove", 0x0C: "echo? (REPEATS, VOICES, curves)",
-            0x12: "unknown_0x12 (T1-T8/SPEED/LOOP/SHIFT)"}
+# Effect type ids from the firmware's effect factory (docs/FIRMWARE_NOTES.md §8).
+FX_TYPES = {0x00: "modmatrix", 0x01: "arp", 0x02: "chance", 0x03: "euclid", 0x04: "filter",
+            0x05: "harmonizer", 0x06: "lfo", 0x07: "randomizer", 0x08: "scaler", 0x09: "swing",
+            0x0A: "envelope", 0x0B: "output", 0x0C: "echo", 0x0E: "register", 0x10: "shaper",
+            0x11: "mono", 0x12: "arpoly", 0x13: "spring"}
+
+ROLL = ["OFF", "1/8", "1/12", "1/16", "1/24", "1/32", "1/48", "1/64", "1/96", "1/128", "1/256"]
+MATH_OFF = 23  # Math condition index for "no condition"; see FORMAT.md §4
 
 
 def parse_fx_slot(r):
@@ -267,7 +268,17 @@ def parse_notes(data):
             pat["notes"] = []
             for _ in range(r.u32()):
                 b = r.raw(13)
-                pat["notes"].append({"raw": b.hex(" "), "pitch?": b[4], "velocity?": b[5]})
+                pat["notes"].append({
+                    "raw": b.hex(" "),
+                    "position": b[1] | b[2] << 8,      # ticks, 48 per step, µTime included
+                    "pitch": b[4] & 0x7F,
+                    "velocity": b[5],
+                    "release_velocity": b[6],
+                    "chance": b[8],
+                    "math": b[9] - MATH_OFF,           # 0 = OFF (signed offset from OFF)
+                    "roll?": ROLL[b[10]] if b[10] < len(ROLL) else b[10],
+                    "length": b[11] | b[12] << 8,      # ticks
+                })
             trk["patterns"].append(pat)
         out["tracks"].append(trk)
     if not r.eof():

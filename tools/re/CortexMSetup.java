@@ -1,5 +1,5 @@
-// Pre-analysis setup for a raw STM32 (Cortex-M) application image.
-// - adds SRAM/CCM/peripheral/system blocks so absolute addresses resolve
+// Pre-analysis setup for a raw STM32H7 (Cortex-M7) application image.
+// - adds DTCM/AXI SRAM/SRAM1-4/peripheral/system blocks so absolute addresses resolve
 // - walks the vector table, creating Thumb functions for each handler
 // - turns on the aggressive instruction finder
 import ghidra.app.script.GhidraScript;
@@ -21,11 +21,13 @@ public class CortexMSetup extends GhidraScript {
 
     @Override
     public void run() throws Exception {
-        block("SRAM", 0x20000000L, 0x80000L, false);
-        block("CCMRAM", 0x10000000L, 0x10000L, false);
-        block("BKPSRAM", 0x40024000L, 0x1000L, false);
-        block("PERIPH", 0x40000000L, 0x24000L, true);
-        block("PERIPH2", 0x40025000L, 0x1FFDB000L, true);
+        // STM32H7 memory map (the Hapax app runs on an H7; see docs/FIRMWARE_NOTES.md)
+        block("DTCM", 0x20000000L, 0x20000L, false);
+        block("AXI_SRAM", 0x24000000L, 0x80000L, false);
+        block("SRAM123", 0x30000000L, 0x48000L, false);
+        block("SRAM4", 0x38000000L, 0x10000L, false);
+        block("BKPSRAM", 0x38800000L, 0x1000L, false);
+        block("PERIPH_APB_AHB", 0x40000000L, 0x20000000L, true);   // D1/D2/D3 peripherals 0x4000_0000-0x5FFF_FFFF
         block("SCS", 0xE0000000L, 0x100000L, true);
 
         MemoryBlock flash = currentProgram.getMemory().getBlock(toAddr(0x08020000L));

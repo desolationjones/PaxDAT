@@ -90,7 +90,9 @@ writer must emit the version the target firmware expects.
 0f 31                                   project root
 0d 3c                                   globals
   u16  tempo × 10                       1300 = 130.0 BPM  🟡
-  8 × val8                              [0,0,1,4,2,0,3,0]  ❓
+  8 × val8                              [0,0,1,4,2,0,3,0]  🟡 project settings: pSCALE, key,
+                                        scale (@+7, list remapped < v11), signature upper (4) and
+                                        lower (index 2 = /4), STICK, …, TR16 TRSP (order to confirm)
 16 × { u8 track_index; Track }
 u8[16]                                  00 01 … 0f  ❓ (track order / mapping)
 1c 31  u32 n  n × Section               song sections, see §3.7
@@ -120,9 +122,9 @@ The offsets are stable names for the editor even where the meaning is unknown.
   val8  @0x1e                   127  ❓ (since v17)
   val8  @0x2b                   64  ❓ (since v17)
   val16 @0x2e                   0  ❓
-  val16 @0x36                   48  ❓
-  val8  @0x3f                   100 ❓   val8 @0x40  100 ❓
-  val8  @0x41                   23  ❓   val8 @0x42  0 ❓
+  val16 @0x36                   48  🟡 default note LENGTH for new notes (ticks)
+  val8  @0x3f                   100 🟡 default VELOCITY   val8 @0x40  100 🟡 default CHANCE
+  val8  @0x41                   23  🟡 default MATH (OFF) val8 @0x42  0 🟡 default ROLL (OFF)
   val16 @0x48                   10000 ❓
   val8  @0x14                   0/1  ❓
   u8    @0x260                  track index (checked against position on load)
@@ -237,20 +239,28 @@ In 3.10 all 16 slots were absent, which is why the record looked like a fixed
 20 bytes. The parameter names are stored in the file, so FX parameters are
 largely self-describing.
 
-| fx_type | Probable effect | Params |
+| fx_type | Effect 🔧 (factory switch) | Params (as stored) |
 |---|---|---|
-| 0x00 | Mod Depth (slot 0 on every track; hosts the mod matrix) | Mod Depth 1-4 |
+| 0x00 | ModMatrix (slot 0 on every track) | Mod Depth 1-4 (+ 4 ModRoutes) |
 | 0x01 | Arpeggiator | STYLE RATE OCTAVE CHORD GATE HUMAN RE-TRIG REPEAT SYNC RATE% |
 | 0x02 | Chance | CHANCE LOT SYNC SYNC-CH USE VELO |
-| 0x03 | Euclidean | NOTE RATE STEPS PULSES ROTATE GATE |
-| 0x04 | Filter? | NOTE MIN/MAX, CC MIN/MAX, DROP PB, DROP AFT, VELO MIN/MAX |
-| 0x05 | Harmonizer / chord? | ORIGIN, NOTE 2…NOTE 8 |
-| 0x07 | Randomizer? | NOTE-/+ OCTAVE-/+ VELO-/+ LENGTH CHANCE USE VELO |
-| 0x09 | Groove | GROOVE SYNC ACCENT HUMAN |
-| 0x0C | Echo? | SYNC RATE RATE% REPEATS VEL CURV GATE CURV NOTE+ NOTE- VOICES VEL END GATE END |
-| 0x12 | ❓ | T1-T8, SPEED I-III, LOOP I-III, GATE, SHIFT |
+| 0x03 | Euclid | NOTE RATE STEPS PULSES ROTATE GATE |
+| 0x04 | Filter | NOTE MIN/MAX, CC MIN/MAX, DROP PB, DROP AFT, VELO MIN/MAX |
+| 0x05 | Harmonizer | ORIGIN, NOTE 2…NOTE 8 |
+| 0x06 | LFO | (incl. PHASE) |
+| 0x07 | Randomizer | NOTE-/+ OCTAVE-/+ VELO-/+ LENGTH CHANCE USE VELO |
+| 0x08 | Scaler | (incl. SCALE, STICK) |
+| 0x09 | Swing | GROOVE SYNC ACCENT HUMAN |
+| 0x0A | Envelope | (incl. ATTACK …) |
+| 0x0B | Output | OUTPUT CHANNEL CONSUME CABLE RETRIG |
+| 0x0C | Echo | SYNC RATE RATE% REPEATS VEL CURV GATE CURV NOTE+ NOTE- VOICES VEL END GATE END |
+| 0x0E | Register | SEED RATE BITS TOGGLE CENTER SPAN GATE STEADY |
+| 0x10 | Shaper | (incl. CURVE) |
+| 0x11 | Mono | (incl. LEGATO) |
+| 0x12 | Arpoly | T1-T8, SPEED I-III, LOOP I-III, GATE, SHIFT |
+| 0x13 | Spring | SCALE TARGET DAMPING PRESHOT … |
 
-Type ids 6, 8, 0x0A, 0x0B, 0x0D–0x11 haven't been seen yet.
+`0x0D` and `0x0F` aren't constructible in OS 3.22 (hidden or removed effects). Effects not yet seen in a sample still need their full parameter list captured, or read from their constructors, before an editor can *create* them.
 
 ### 3.4 ModRoute (`11 33`), 4 per Mod Depth slot ✅ structure
 
@@ -272,10 +282,17 @@ second one isn't in these files.
 
 | type | Meaning | Layout seen |
 |---|---|---|
-| 0x00 | MIDI CC 🟡 | byte 5 = CC number; byte 6/7 vary (`00 00`, `01 00`, `03 61`) ❓ |
-| 0x03 | FX parameter 🟡 | byte 4 = `slot << 5`? (0x20…0x80, 0x22); byte 5 = param idx (`ff` = ON/OFF) |
-| 0x06 | 14-bit target, probably Pitch Bend 🟡 | values up to 11702, default 8568 |
+| 0x00 | MIDI CC 🔧 | byte 5 = CC number; bytes 6/7 vary (`00 00`, `01 00`, `03 61`) ❓ |
+| 0x03 | FX parameter ✅ | byte 4 = `slot << 5`? (0x20…0x80, 0x22); byte 5 = param idx (`ff` = ON/OFF) |
+| 0x04 | poly aftertouch 🔧 | |
+| 0x05 | channel aftertouch 🔧 | |
+| 0x06 | pitch bend, 14-bit 🔧 | values up to 11702, default 8568 |
+| 0x08 | program change 🔧 | |
 | 0x0A | mod-matrix target ❓ | all other bytes 0 |
+
+Types 0/4/5/6/8 come from the firmware's MIDI-file exporter, which switches on
+this byte to choose the MIDI status (`B0/A0/D0/E0/C0`). Velocity, NRPN, CC pair
+and CV destinations use other ids, not yet mapped.
 
 ### 3.6 Lane table (`2d 33`) ✅
 
@@ -320,23 +337,22 @@ defaults below. The firmware stores notes in RAM as
 
 Note layout, from 22 notes across 4 tracks:
 
-| Byte | Observed | Interpretation |
-|---|---|---|
-| 0 | `08` always | 🔧 event type "note" (the reader stops on anything else) |
-| 1-2 | 0, 96, 102, 144, 192 … 672 | **u16 start position in ticks** 🟡 |
-| 3 | `00`, `02`, `0c` | 🔧 bit 0 is a flag the UI clears (selection?); other bits ❓ |
-| 4 | | **pitch** ✅ |
-| 5 | `64`, `7f` | **velocity** ✅ |
-| 6 | `00`; `64` on the 4-note chord on track 11 | ❓ |
-| 7 | `00` | ❓ |
-| 8 | `64`, `4e` | **probability %** 🟡 |
-| 9-10 | 22, 23, 24, 279 | **u16 length?** 🟡 (unit unclear) |
-| 11 | `30`, `90` (prob-78 note), `00` (track 4) | ❓ flags / condition |
-| 12 | `00`, `03` (track 4) | ❓ |
+| Byte | Payload | Observed | Interpretation |
+|---|---|---|---|
+| 0 | n/a | `08` always | 🔧 event type "note" (the reader stops on anything else) |
+| 1-2 | n/a | 0, 96, **102**, 144 … 672 | 🔧 **u16 start position in ticks, µTime included** (102 = step 2 + 6 ticks). The exporter uses it as-is |
+| 3 | +0 | `00`, `02`, `0c` | 🔧 bit 0 = UI selection flag (cleared by the editor); bits 1–7 ❓ |
+| 4 | +1 | 0–127 | 🔧 **pitch**. Bit 7 set ⇒ note skipped on export (disabled flag) |
+| 5 | +2 | `64`, `7f` | 🔧 **velocity** |
+| 6 | +3 | `00`; `64` on the recorded chord | 🔧 **note-off (release) velocity** |
+| 7 | +4 | `00` | ❓ |
+| 8 | +5 | `64`, `4e` | **chance %** (default 100) |
+| 9 | +6 | `16`, `17`, `18` | 🔧 **Math condition index**: 23 = OFF (default), 22 = FILL, 24 = `1:2` (see FIRMWARE_NOTES §8) |
+| 10 | +7 | `00`, `01` | 🟡 **Roll index**: 0 = OFF, 1 = 1/8 … 10 = 1/256 |
+| 11-12 | +8 | `30 00`, `90 00`, `00 03` | 🔧 **u16 length in ticks** (48 = 1 step). The exporter writes note-off at start + length |
 
-Timing: automation points in a 16-step pattern stop at 765 (just under 768),
-and notes sit on multiples of 48. That suggests **192 PPQN, 48 ticks per 16th
-step**. 🟡
+Timing: **192 PPQN, 48 ticks per 16th step** ✅ (manual: ×48 maximum zoom;
+firmware: pattern length × 0x30).
 
 ## 5. `autom.dat` ✅ structure
 
@@ -360,14 +376,19 @@ Recorded lanes contain up to about 100 points per pattern. There are 17
 PointLists per lane where 16 patterns would be expected; the extra one may be
 a "lane default". ❓
 
-## 6. `drums.dat` / `mpe.dat` ✅ (empty case only)
+## 6. `drums.dat` / `mpe.dat` 🔧 structure (no non-empty sample yet)
 
-`06 32 00` / `26 32 00`: tag, then a zero count. Their layout is probably
-similar to `notes.dat`. 🔧 From the firmware, an MPE note list is a separate
-class (`27 v1`). Each MPE note has the same `08 / u16 position / 10-byte`
-header, followed by a `29 v1` record: the payload plus **three expression
-curves** (probably pitch, pressure and timbre). A sample capture is still needed
-before writing these files.
+```
+drums.dat:  06 32 · u8 track_count · { u8 track · u8 pattern_count · { u8 pattern · DrumList } }
+DrumList  = 02 32 · u32 count · count × { u16 position; u8[10] payload }   (no 08 type byte)
+
+mpe.dat:    26 32 · same nesting · MpeList
+MpeList   = 27 31 · u32 count · count × { 08; u16 position; 29 31 · u8[10] payload · 3 × curve }
+```
+
+The three curves are the MPE expressions (likely pitch, pressure, timbre).
+AFTR tracks have no file of their own, so their per-note pressure is most
+likely stored here as well. A capture is needed before *writing* these files.
 
 ## 7. Runtime state is saved too
 
@@ -435,25 +456,17 @@ or a capture.
 | AFTR | new track type after MPE; single channel; per-note pressure curves | no separate file in firmware ⇒ probably `mpe.dat`-style curves 📖 |
 | Settings | saved only when the user selects SAVE in settings | explains `settings.dat` carrying older class versions ✅; the `21`/`22` tail = **colour palette** (`palette_serde.cpp`) 📖 |
 
-## 12. Open questions after the manual
+## 12. Open questions after the manual and the second firmware pass
 
-Most meanings are now known. What remains is mainly **encodings** (bit
-positions, enum numbering, field order). The firmware can answer these without
-captures; a handful of small captures then confirm them.
-
-| # | Open item | Best source |
+| # | Open item | Status / best source |
 |---|---|---|
-| 1 | Note payload: bit layout and units of LENGTH, µTIME, ROLL, MATH (plus bytes 3, 6, 7, 11, 12) | firmware (step-edit setters); confirm with **one** capture |
-| 2 | Enum numbering: track type, output kind/index, input port, FX ids (8 left), mod sources/destinations, automation destination types, scales, follow actions, run modes | firmware UI string tables (listed in enum order) |
-| 3 | Order of the 8 project globals and of the track fields `@0x18…@0x4a` | firmware deserializer clamps + manual ranges; confirm with one capture |
-| 4 | Tempo scale (×10 or ×100) | one capture (120.5 BPM) |
-| 5 | `drums.dat` and `mpe.dat`/AFTR layouts | firmware writers (already located), then one capture each |
-| 6 | Device capacity limits (notes, points, MPE) | firmware |
-| 7 | Small unknown classes `02`, `1f`, `25`, `28`, `2a` and runtime flags | firmware; low priority (preserve as-is) |
-
-The earlier questions about A → B, routings, note properties, pattern lengths,
-mod matrix and song length are answered by the manual, or they reduce to items
-1–4 above.
+| 1 | Note payload | **mostly solved** (§4). Left: byte 7, bits 1–7 of byte 3; confirm roll at byte 10 |
+| 2 | Enum numbering | **FX ids, automation types (CC/AT/PB/PC), Math and Roll solved**. Left: track type, output kinds, mod-source ids, scales, follow actions, run modes |
+| 3 | Order of the 8 project globals and the live/quantize track fields (`@0x18…@0x2e`) | defaults narrow it down; one capture confirms |
+| 4 | Tempo scale (×10 or ×100) | one capture |
+| 5 | `drums.dat`, `mpe.dat`, AFTR | **structure solved** (§6). Payload meaning for drums (lane index?) and curve format need one capture each |
+| 6 | Capacity | **no fixed limits**: shared RAM arena. The editor needs a memory estimate (arena size still to find) |
+| 7 | Minor classes `1f`, `25`, `28`, `2a` and runtime flags | preserve as-is |
 
 ### Captures still needed (much shorter now)
 
