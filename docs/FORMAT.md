@@ -409,32 +409,58 @@ names and notes (§3.6). It does not store the whole definition.
 
 ---
 
-## 11. Open questions
+## 11. Cross-reference with the Hapax manual
 
-Ground truth from the person who made the samples would resolve most of these:
+Source: the official manual (squarp.net/hapax/manual, PDF dated June 2026, and
+the per-mode web pages). 📖 marks a field whose *meaning* comes from the
+manual. The exact encoding of each still needs one confirmation, from firmware
+or a capture.
 
-1. **A → B**: was anything changed in the UI, or was B saved at a different
-   moment in playback? (The diff looks like runtime state only.)
-2. **Routings**: for tracks 4, 5, 9 and 11, which output port and channel, and
-   which input port and channel, were set? This would map the port enum and `in_mode`.
-3. **Notes**: which properties were set on which notes? In particular the note
-   at 102 ticks (nudged?), the 279-length note, the probability-78 note, the
-   velocity-127 note, and the 4-note chord on track 11.
-4. **Pattern lengths**: what length did you set for track 9 pattern 1 (stored as 32) and for the others (to confirm 16th-step units).
-5. **Mod matrix**: what source, target and depth were set, and where? Only one
-   populated route was found.
-6. **Song**: what length was set for SECTION A (stored value 32)?
+| Area | Manual says | Matches in the file |
+|---|---|---|
+| Timing | Max zoom ×48 per 16th step; envelope: "48 clock ticks = 1 step" | **192 PPQN, 48 ticks per step** ✅. Note positions and automation points are in ticks |
+| Pattern params | RUN (–– REVERSE PING-PONG RND BAR RND BEAT RND 1/16), TRIG (FREE/RESTART), LENGTH 1 step–32 bars (512 steps), PC/MSB/LSB, COLOR RGB1–8, FOLLOW 1/2 (–– STOP NEXT PREVIOUS ANY OTHER FIRST LAST RSTR) with probability, FOLLOW LEN, loop points, pattern mute | §3.2 bitfields 📖: 3-bit = RUN, 1-bit = TRIG, 10-bit = LENGTH, 3 × u8 `ff` = PC/MSB/LSB (`ff` = none), 4-bit fields = FOLLOW 1/2 and COLOR, 7-bit `100` = follow probability, 10-bit = FOLLOW LEN, u16 0 / u16 ffff = loop start/end, 1-bit = mute. The varying 7-bit `0x3c` field is likely piano-roll scroll (UI state) |
+| Track 16 | Track 16 is the **transpose (TRSP) leader** | why the FX chain special-cases index 15 (§3.3) |
+| Track settings | output port (MIDI A–D, USB DEVICE/HOST × **16 virtual cables**, CV/GATE 1–4, CV 1–4, GATE 1–4), output channel; input port (––, MIDI A–D, USB D/H, ALL ACTIVE), input channel (1–16, ALL); quantize (–– 1/64 1/32 1/24 1/16), strength %; pTRSP, pSCALE; track name; mono edit; instrument def; **time elasticity %** (per track); track type POLY / DRUM / MPE / **AFTR** | Port index of 4 bits = 16 virtual cables. `val16 @0x48 = 10000` = elasticity 100.00 %. The `opt<cstr> @0x264` is the **track name** (the instrument def sets it). Remaining `@0x18…` fields are quantize, strength, pTRSP, pSCALE, mono edit, track type and live-mode scale/key 📖 (order unconfirmed) |
+| Project settings | pSCALE on/off, key, scale, STICK (down/up/filter), time signature (upper and lower numeral), TR16 TRSP (off/TRSP/CHRD) | the 8 `val8` globals in `0d` 📖. The scale list grew over versions (firmware remap for < v11 clamps at 66) |
+| Tempo | BPM shared by both projects, with fine digits | stored from a global in `0d` (u16 1300 for 130 BPM). Whether the scale is ×10 or ×100 needs one capture |
+| Project LFO A+B | wave (SINE TRI RAMP SQUARE RANDOM FLAT), SYNC, RATE 64 bars–1/128, PHASE ±180°, FLAT level | **the two `24 32` blocks** 📖 (`[0,1,60,10,0,50]`) |
+| FX locking | "lock effect parameter to current pattern"; "lock ON/OFF per pattern" | the **16 `opt<u16>` slots** in each FX param are per-pattern locks ✅ |
+| FX catalogue | ModMatrix (always first), Arpeggiator, Arpoly, Chance, Echo, Envelope, Euclid, Filter, Harmonizer, LFO, Mono, Output, Randomizer, Register, Scaler, Shaper, Spring, Swing (+ Quantizer and Project LFO outside the chain) | ids known: 0 matrix, 1 arp, 2 chance, 3 euclid, 4 filter, 5 harmonizer, 7 randomizer, 9 swing, 0x0C echo, **0x12 arpoly**. The rest (envelope, LFO, mono, output, register, scaler, shaper, spring) are unassigned among 6, 8, 0x0A, 0x0B, 0x0D–0x11. Every saved param carries its name, so FX can be identified by name |
+| ModMatrix | sources: CC 0–119, PB, AT, CV IN 1–2, Project LFO A/B, keytracking, velocity, fill. Destinations: CC, PB, AT, PC, velocity, NRPN, CC pair, CV OUT 1–4, FX param. Params: DEPTH, OFFSET, POLARITY, CONSUME | `11 33`: `15` = source, `16` = destination, f32 = DEPTH, then OFFSET / POLARITY / CONSUME packed in the two u16s 📖 |
+| Automation | destinations: CC, PB, AT, PC, velocity, NRPN, CC pair (14-bit), CV IN, CV OUT, effect param, VOID. Per-lane **default value**; **per-row snap values** (8 rows); **mute per pattern**; interpolation on/off; events stored per pattern | `opt<u16>` = default value; trailing `opt<u16[8]>` = **row snap values** ✅ (`35…127`). The per-pattern flag in each PointList header is mute or interpolation. `16 31` byte 0 = destination type 📖 |
+| Sections / song | a section = 16 pattern selections (+ mute states), named "section A…"; a song = list of (section, duration); modes PLAY / LOOP / PERFORM | `1b` = name + 16 bytes; `1d` = (section, duration) ✅ |
+| Drum lanes | per lane: INPUT note (0–127 or LINK), OUTPUT note, OUTPUT channel (TRACK CH, CH 1–16, GATE/CV/CVG 1–4); 16 lanes | the 7-byte lane record (§3.6) 📖 |
+| Notes | per note: pitch, velocity, LENGTH (1/16…∞, tick fine-tune), µTIME ±50 %, CHANCE 0–100 %, ROLL 1/8…1/256, MATH (≈ 40 conditions incl. FILL, 1ST, PRE, SYNC, NT, PS, PB, X:Y, NO FX); AFTR/MPE: per-note pressure (curve or fixed) | the 10-byte payload holds exactly these. Pitch, velocity and chance are located; **length, µTime, roll and math encodings are not** |
+| AFTR | new track type after MPE; single channel; per-note pressure curves | no separate file in firmware ⇒ probably `mpe.dat`-style curves 📖 |
+| Settings | saved only when the user selects SAVE in settings | explains `settings.dat` carrying older class versions ✅; the `21`/`22` tail = **colour palette** (`palette_serde.cpp`) 📖 |
 
-### Captures still needed
+## 12. Open questions after the manual
 
-| Change | Resolves |
-|---|---|
-| Drum track with hits in 2 lanes | `drums.dat` |
-| MPE track and AFTR track with one note each | `mpe.dat`, AFTR storage |
-| Single note: move by 1 step, by 1 tick (nudge), change length by 1 step | note position/length units |
-| Each note option alone (condition, ratchet, etc.) | note bytes 0, 3, 6, 7, 11, 12 |
-| Tempo 120.0 → 120.5 | tempo encoding |
-| Each output port in turn on one track | port enum |
-| Two sections, song with 2 entries | song layout |
-| Remaining FX types | FX type ids |
-| One file saved twice without changes | non-determinism check |
+Most meanings are now known. What remains is mainly **encodings** (bit
+positions, enum numbering, field order). The firmware can answer these without
+captures; a handful of small captures then confirm them.
+
+| # | Open item | Best source |
+|---|---|---|
+| 1 | Note payload: bit layout and units of LENGTH, µTIME, ROLL, MATH (plus bytes 3, 6, 7, 11, 12) | firmware (step-edit setters); confirm with **one** capture |
+| 2 | Enum numbering: track type, output kind/index, input port, FX ids (8 left), mod sources/destinations, automation destination types, scales, follow actions, run modes | firmware UI string tables (listed in enum order) |
+| 3 | Order of the 8 project globals and of the track fields `@0x18…@0x4a` | firmware deserializer clamps + manual ranges; confirm with one capture |
+| 4 | Tempo scale (×10 or ×100) | one capture (120.5 BPM) |
+| 5 | `drums.dat` and `mpe.dat`/AFTR layouts | firmware writers (already located), then one capture each |
+| 6 | Device capacity limits (notes, points, MPE) | firmware |
+| 7 | Small unknown classes `02`, `1f`, `25`, `28`, `2a` and runtime flags | firmware; low priority (preserve as-is) |
+
+The earlier questions about A → B, routings, note properties, pattern lengths,
+mod matrix and song length are answered by the manual, or they reduce to items
+1–4 above.
+
+### Captures still needed (much shorter now)
+
+One project, saved after each step, is enough:
+
+1. Tempo 120.50; time signature 7/8; pSCALE on with a non-default key and scale.
+2. One track: DRUM type with 2 hits in 2 lanes (one lane with OUTPUT = CH 10);
+   one MPE track and one AFTR track, each with a single recorded note.
+3. One poly note with every property non-default: length 3 steps + 5 ticks,
+   µTime +25 %, chance 50 %, roll 1/32, math 2:3.
