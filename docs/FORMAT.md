@@ -1,14 +1,16 @@
 # Squarp Hapax project file format: working notes
 
-Status: **second pass**. This is reverse-engineered from:
+Status: **third pass**. Sample-file analysis is now cross-checked against the
+OS 3.22 firmware's own serializers (see `docs/FIRMWARE_NOTES.md`). Sources:
 
 | Sample | OS | Notes |
 |---|---|---|
 | `Samples/OS 3.10/OT_REDUX-101026` | 3.10 | original sample |
 | `Samples/OS 3.22/OT_REDUX-101026{A,B,C}` | 3.22 | variations: routings, notes, FX, automation, mod matrix, song |
 | `Samples/OS 3.22/settings.dat`, `AUTO.LOAD`, `*.txt` | 3.22 | device-level files |
+| OS 3.22 firmware (not in repo) | 3.22 | save/load code, read with Ghidra |
 
-Everything here comes from observation, not from vendor documentation.
+Nothing here comes from vendor documentation.
 No drum, MPE or AFTR (poly-aftertouch) tracks have been captured yet.
 
 Track and pattern numbers in prose are **1-based**, as on the device. Indexes
@@ -16,6 +18,7 @@ stored in the file are 0-based.
 
 Confidence markers:
 
+- 🔧 **firmware**: read directly from the firmware's serializer or deserializer.
 - ✅ **confirmed**: `tools/paxdat_probe.py` parses every sample byte-for-byte with this layout.
 - 🟡 **likely**: consistent across samples, but the meaning is inferred.
 - ❓ **unknown**: position and size are known, meaning is not.
@@ -55,7 +58,7 @@ python3 tools/paxdat_probe.py "<sd_root>"         [--dump]   # settings.dat + AU
 | Float | IEEE-754 LE `f32` |
 | String | ASCII, NUL-terminated, no length prefix, no padding |
 | `opt<T>` | `u8` presence flag (0/1), then `T` only if 1 |
-| `valN` | generic value wrapper: tag `0e 31` followed by an N-byte LE int |
+| `valN` | scalar wrapper: tag `0e 31` followed by an N-byte LE int. 🔧 The width (1, 2 or 4) is chosen by the *calling* serializer and isn't recorded in the stream. |
 
 ### Object tags
 
@@ -68,8 +71,15 @@ version byte changes when a layout changes:
 
 | Class | 3.10 | 3.22 | Layout change |
 |---|---|---|---|
-| `0c` Track | v18 | **v19** | v19 appends 6 bytes at the end of the track (§3.1) |
+| `0c` Track | v18 | **v19** | v19 appends a `val32` at the end of the track (§3.1) |
 | all others seen | n/a | n/a | unchanged |
+
+🔧 How the firmware treats versions: every reader checks the class byte (a
+mismatch gives `SD ERROR: CORRUPTED FILE`) and rejects versions newer than it
+knows (`SD ERROR: UNSUPPORTED VERSION`). It **does accept every older
+version** and migrates it in code. Examples: before track v9 there were only
+8 patterns per track, and before track v18 one enum field was renumbered.
+`docs/FIRMWARE_NOTES.md` §5 lists every class with the version OS 3.22 writes.
 
 This is useful for an editor: a reader can dispatch on the version, and a
 writer must emit the version the target firmware expects.
@@ -90,73 +100,115 @@ u8[16]                                  00 01 … 0f  ❓ (track order / mapping
 18 × 00                                 trailing padding ❓
 ```
 
-### 3.1 Track (`0c 42` / `0c 43`)
+### 3.1 Track (`0c 42` / `0c 43`) 🔧
+
+The firmware's track serializer writes these fields in this order. `@0x..` is
+the field's offset in the in-memory `Track` struct (stride `0xcd8`, 16 tracks).
+The offsets are stable names for the editor even where the meaning is unknown.
 
 ```
-0c 42|43
-  val8                       ❓ always 0
-  u8[3]                      ❓
-2c 34                        output routing 🟡
-  val8  midi_channel         0-based
-  u32                        ❓ always 0
-  u32                        0/1: 1 = non-default output?  🟡
-  u8    port?                0, 1, 3, 4 observed  🟡 (output port enum)
-  u8                         ❓ 0
-  u8                         0x0f ❓
-2b 33                        track settings
-  val8                       0/1 (1 on tracks with a non-default input?) ❓
-  u32 2, u32 2, u8 0         ❓ constant
-  u32 in_mode                0, 1 or 2   🟡 MIDI input mode
-  if in_mode == 2: u32, u8   observed (1,1) (0,1) (0,0)  🟡 input port + channel
-  16 × val (widths 1,1,1,1,1,1,1,1,2,2,1,1,1,1,2,1)
-       defaults [60,0,0,3,0,100,127,64,0,48,100,100,23,0,10000,0]
-       [0] 60 by default; 0/12/24/36 on some tracks  🟡 root note / transpose / range
-       [1] 0, or 2 on track 11 in C  ❓
-       [2] 1 on tracks with an instrument or notes  ❓
-       [15] 1 on track 16 and track 11 in C  ❓
-  u8   track_index (again)
-  u8   ❓ 0/1; changes between A and B (runtime state?)
-  opt<cstr> instrument_name  "OCTATRACK"
-  val8 4 ❓
-  u8[3] ❓ track 9: 00 00 00 → 00 00 01 between A and B
-  opt<cstr> instrument_file  "ELEKTRON_OCTATRACK.TXT"
-  u8[3]  01 00 00 ❓
-16 × PatternHeader (0b 35)   §3.2
-FxChain (12 32)              §3.3
-8 × opt<16 31 Target>        CC knob assignments (from instrument def)   §3.5
-val8 0 ❓, val8 100 ❓
-2d 33  LaneTable             §3.6
-1f 31  u32 ❓
-val8 ❓
-8 × { 2a 31 u8 }             all 0 ❓
-[v19 only] 0e 31 00 00 00 00 ❓ (val8 + 3 bytes, or a 4-byte value)
+0c 43                           v19 (OS 3.22); v18 in 3.10. Reader accepts ≤ v19
+  val32 @0x0c                   ❓ 0
+2c 34  Output (§3.1.1)
+2b 33  Inputs (§3.1.2)
+  val8  @0x18                   60 by default; 0/12/24/36 seen  🟡 root note / range
+  val8  @0x19                   enum; renumbered by migration from < v18  ❓ (clock/rate-like)
+  val8  @0x1a                   1 on tracks with an instrument or notes  ❓
+  val8  @0x1b                   3  ❓
+  val8  @0x1d                   0  ❓ (separate reader: since v15)
+  val8  @0x1c                   100  ❓
+  val8  @0x1e                   127  ❓ (since v17)
+  val8  @0x2b                   64  ❓ (since v17)
+  val16 @0x2e                   0  ❓
+  val16 @0x36                   48  ❓
+  val8  @0x3f                   100 ❓   val8 @0x40  100 ❓
+  val8  @0x41                   23  ❓   val8 @0x42  0 ❓
+  val16 @0x48                   10000 ❓
+  val8  @0x14                   0/1  ❓
+  u8    @0x260                  track index (checked against position on load)
+  u8    @0x261                  ❓ 0/1 (runtime-ish; changes A→B)
+  opt<cstr> @0x264              instrument name ("OCTATRACK")
+  val8  @0x4a                   4 ❓
+  u16   @0x284                  ❓
+  u8    @0x280                  ❓ (track 9: 0 → 1 between A and B)
+  opt<cstr> @0x240              instrument definition file name. On load the
+                                firmware re-reads this .txt ("LOADING INSTRUMENT DEF")
+  u8 @0x287, u8 @0x286, u8 @0x289   01 00 00 ❓ (@0x286 since v14, @0x289 since v15)
+16 × PatternHeader (0b 35) @0x2c0 + 0x18·n   §3.2
+FxChain (12 32) @0x458                        §3.3 (includes the 8 CC knob slots)
+LaneTable (2d 33)                             §3.6
+1f 31 … @0xae8                                ❓
+val8 @0x15                                    ❓
+8 × 2a 31 @0x294 + 4·n                        ❓
+[v19] val32 @0x10                             ❓ 0 (new in OS 3.22, maybe AFTR-related)
 ```
 
-### 3.2 Pattern header (`0b 35`), 16 per track, 23 bytes ✅
+Earlier passes listed "16 values inside the `2b` block". The firmware shows the
+`2b` block ends after the input routing; the 16 values are separate track
+fields. The widths observed in the samples (`1,1,1,1,1,1,1,1,2,2,1,1,1,1,2,1`)
+match the serializer exactly.
+
+#### 3.1.1 Output (`2c 34`) 🔧
 
 ```
-0b 35
-  u8   pattern_index
-  u8   ❓ 00 normally; 02 on track 11 pattern 1 in C
-  u8   ❓ 01 normally; 00 on track 11 pattern 1 in C
-  u8   view/scroll note?  🟡 (0x3c default, varies with content)
-  u8   length in 16th steps?  🟡 (16 default; 32 on track 9 pattern 1)
-  u8[4] 0 ❓ (track 9 pattern 1: 00 01 00 00)
-  u8[5] ff ff ff ff ff ❓ (track 4 3.10: ff ff 04 18 05)
-  u8[4] 0 ❓ (track 1 pattern 2 in C: 00 00 06 00)
-  u8   0x64 (100) ❓
-  u8[2] 0 ❓
+2c 34
+  val8  midi_channel (0-based)
+  u32   output type             0 = MIDI-style port ❓ (other types: CV/gate?)
+  if type == 0:
+    Port { u32 kind; u8 index }   kind 0 = MIDI DIN (index 2 bits: A–D)
+                                  kind 1 = USB (index 4 bits)  kind 2 = CV/Gate (index 4 bits)  🟡
+    u16   ❓ derived from the port by a lookup (00 0f in all samples)
+  else: u8 (2-bit) + 2 zero bytes
 ```
+
+Sample check: track 9 = `kind 0, index 3` → MIDI D. The Octatrack tracks use
+`kind 1, index 0`, which matches `OUTPORT USBD1` in the instrument definition.
+
+#### 3.1.2 Inputs (`2b 33`) 🔧
+
+```
+2b 33
+  val8 ❓
+  u32 mode_a ; if mode_a == 2: Port     (always 2 + {kind 2, index 0} in samples ❓)
+  u32 mode_b ; if mode_b == 2: Port     0 / 1 / 2 seen; 2 = specific port + channel 🟡
+```
+
+The firmware's input-port names, in UI order: `INTERNAL, MIDI IN A, MIDI IN B
+(TRS), USB DEVICE, USB HOST, MIDI AUTO`.
+
+### 3.2 Pattern header (`0b 35`), 16 per track, 23 bytes 🔧
+
+In memory the pattern is a **packed bitfield struct**. The serializer unpacks
+each field into its own byte or u16. Bit widths are from the shift/mask code,
+so they give each field's legal range:
+
+| File bytes | Width | Default | Notes |
+|---|---|---|---|
+| 0 | u8 | | pattern index (@0x14) |
+| 1 | 3 bits | 0 | ❓ (2 on track 11 pattern 1 in C) |
+| 2 | 1 bit | 1 | ❓ (0 on track 11 pattern 1 in C) |
+| 3 | 7 bits | 60 | 🟡 view / root note |
+| 4-5 | 10 bits | 16 | **length**, 🟡 in 16th steps (32 on track 9 pattern 1) |
+| 6 | 1 bit | 0 | ❓ (1 on track 9 pattern 1) |
+| 7-8 | u16 | 0 | ❓ |
+| 9-10 | u16 | ffff | ❓ |
+| 11, 12, 13 | u8 | ff | ❓ (track 4, 3.10: `04 18 05`) |
+| 14 | 1 bit | 0 | ❓ |
+| 15, 16, 17 | 4 bits each | 0 | ❓ (`06` in one sample) |
+| 18 | 7 bits | 100 | ❓ |
+| 19-20 | 10 bits | 0 | ❓ |
 
 Note data is not here (see §4).
 
-### 3.3 FX chain (`12 32`) ✅
+### 3.3 FX chain (`12 32`) 🔧
 
 ```
 12 32
-  sub-tag  14 31 | 13 32      ❓ track 16 always uses 13 v2
-  val8     1 | 2
-  8 × FxSlot
+  if track index == 15:  13 32 + val8     🔧 track 16 is special-cased in the serializer
+  else:                  14 31 + val8
+  8 × FxSlot                               @+0x400, stride 8
+  8 × opt<16 31 Target>                    CC knob assignments (§3.5), @+0x440 stride 0xc
+  val8 @+1, val8 @+2                       0, 100 ❓
 ```
 
 ```
@@ -246,26 +298,33 @@ Section:   u8 index?  1b 33  cstr name  u8[16] pattern_per_track?
 SongEntry: 1d 31  u8 section_index?  u16 length?   (0, 32)
 ```
 
-## 4. `notes.dat` ✅ structure
+## 4. `notes.dat` 🔧 structure
 
 ```
-05 32
+05 32                           reader accepts ≤ v2
 u8 track_count
-  u8 track_index
+  u8 track_index                0..15
   u8 pattern_count
-    u8 pattern_index
-    00 31                       ❓ (tag of class 0?)
+    u8 pattern_index            0..16 (17 slots per track in memory) 🔧
+    00 31                       NoteList tag: class 0x00, v1 🔧
     u32 note_count
-    note_count × Note (13 bytes)
+    note_count × { u8 0x08 (event type: note); u16 position; u8[10] payload }
 ```
+
+🔧 The 10-byte payload is copied **verbatim from the in-memory note struct**
+(`memcpy`, not field by field). Notes are kept in a container sorted by
+position. The loader pre-fills defaults `0x64` (100) and `0x17` (23) at payload
+bytes 5 and 6 (file bytes 8 and 9), which matches the probability and length
+defaults below. The firmware stores notes in RAM as
+`[project slot A/B][16 tracks][17 lists]`.
 
 Note layout, from 22 notes across 4 tracks:
 
 | Byte | Observed | Interpretation |
 |---|---|---|
-| 0 | `08` always | ❓ flags/version |
+| 0 | `08` always | 🔧 event type "note" (the reader stops on anything else) |
 | 1-2 | 0, 96, 102, 144, 192 … 672 | **u16 start position in ticks** 🟡 |
-| 3 | `00`, `02`, `0c` | ❓ (per-track constant-ish) |
+| 3 | `00`, `02`, `0c` | 🔧 bit 0 is a flag the UI clears (selection?); other bits ❓ |
 | 4 | | **pitch** ✅ |
 | 5 | `64`, `7f` | **velocity** ✅ |
 | 6 | `00`; `64` on the 4-note chord on track 11 | ❓ |
@@ -304,7 +363,11 @@ a "lane default". ❓
 ## 6. `drums.dat` / `mpe.dat` ✅ (empty case only)
 
 `06 32 00` / `26 32 00`: tag, then a zero count. Their layout is probably
-similar to `notes.dat`. A sample with a drum track and an MPE track is needed.
+similar to `notes.dat`. 🔧 From the firmware, an MPE note list is a separate
+class (`27 v1`). Each MPE note has the same `08 / u16 position / 10-byte`
+header, followed by a `29 v1` record: the payload plus **three expression
+curves** (probably pitch, pressure and timbre). A sample capture is still needed
+before writing these files.
 
 ## 7. Runtime state is saved too
 

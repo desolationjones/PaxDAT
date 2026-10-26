@@ -1,0 +1,7 @@
+# Firmware binaries and reverse-engineering work products: never commit
+Target Firmware/
+re-work/
+*.bin
+
+# Windows download markers
+*:Zone.Identifier
