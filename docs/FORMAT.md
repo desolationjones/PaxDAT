@@ -479,12 +479,85 @@ or a capture.
 | AFTR | new track type after MPE; single channel; per-note pressure curves | no separate file in firmware ⇒ probably `mpe.dat`-style curves 📖 |
 | Settings | saved only when the user selects SAVE in settings | explains `settings.dat` carrying older class versions ✅; the `21`/`22` tail = **colour palette** (`palette_serde.cpp`) 📖 |
 
-## 12. Open questions (after capture 102726A)
+## 12. Enum reference (OS 3.22) 🔧
+
+Read from the firmware's UI tables (`{length, text}` arrays in display order),
+then confirmed against captures and your encoder walk where noted. Index = the
+stored value.
+
+**Math (note condition)**, 69 values. Confirmed by the encoder walk (FX IF FILL = 66) and capture 102726A:
+
+| Index | Values |
+|---|---|
+| 0–4 | PB<5, PB<4, PB<3, PB<2, PB=0 |
+| 5–9 | PS<5 … PS=0 |
+| 10–14 | NT<5 … NT=0 |
+| 15–22 | !SYNC, SYNC, !PRE, PRE, !FIRST, FIRST, !FILL, FILL |
+| **23** | (blank) = OFF, **default** |
+| 24–32 | 1:2, 2:2, 1:3, 2:3, 3:3, 1:4, 2:4, 3:4, 4:4 |
+| 33–44 | 1:5, 1:6 … 1:16 |
+| 45–65 | !1:2 … !1:16 (same order as 24–44) |
+| 66–68 | FX IF FILL, NO FX IF FILL, NO FX |
+
+**Roll:** 0 OFF, 1 1/8, 2 1/12, 3 1/16, 4 1/24, 5 1/32, 6 1/48, 7 1/64, 8 1/96, 9 1/128, 10 1/256.
+
+**pSCALE mode** (global +5): 0 OFF, 1 STICK DOWN, 2 STICK UP, 3 FILTER ✅.
+
+**pQUANT** (global +10): 0 ––, 1 1/64, 2 1/32, 3 1/24 ✅, 4 1/16.
+
+**TR16 TRSP** (track 16, FX-chain head): 0 ––, 1 TRANSPOSE, 2 MATCH CHORD ✅.
+
+**Pattern RUN:** 0 ––, 1 REVERSE, 2 PING-PONG, 3 RANDOM BAR, 4 RANDOM BEAT, 5 RANDOM 1/16.
+
+**Pattern TRIG:** 0 FREE, 1 RESTART 🟡. The stored default is 1, but the manual says the default is FREE. Check one pattern.
+
+**Follow action:** 0 ––, 1 STOP, **2 PREVIOUS, 3 NEXT**, 4 ANY, 5 OTHER, 6 FIRST, 7 LAST, 8 RSTR. The firmware order differs from the manual's listing.
+
+**Track type** (`@0x0c`): 0 POLY, 1 MPE, 2 DRUM. AFTR = 1 + AFTR flag (`@0x10`).
+
+**Port kind:** 0 MIDI DIN (A–D), 1 USB DEVICE (cable 1–16), 2 USB HOST (cable 1–16).
+
+**Input mode:** 0 ––, 1 ALL ACTIVE, 2 specific port.
+
+**CV/Gate outputs** (non-MIDI output branch; UI order): GATE 1–4, CV 1–4, CV/G 1–4 (not yet captured).
+
+**FX type:** see §3.3. The UI name table (MATRIX, ARP, CHANCE, EUCLID, FILTER,
+HARMO, LFO, RANDOM, SCALER, SWING, ENV, OUTPUT, ECHO, __COLLECT, REGISTER,
+__MUTATE, SHAPER, MONO, ARPOLY, SPRING) matches the factory ids.
+
+**Scale** (global +7). Order from the firmware's scale objects, which are built
+in index order. **10 = DORIAN** ✅. Names marked ² appear more than once; the
+device shows a second label line to tell them apart, still to be read off the
+device.
+
+| | | | |
+|---|---|---|---|
+| 0 CHROMATIC | 15 PENTATONIC² | 30 PENTATONIC² | 45 DORIAN (B2) |
+| 1 MAJOR | 16 PENTA (DORIAN) | 31 PENTA (IV) | 46 HALF DIMINISHED |
+| 2 HARMONIC² | 17 PENTA (PELOG) | 32 PENTA (D II) | 47 LOCRIAN |
+| 3 AUGMENTED | 18 BLUES² | 33 LYDIAN DOMINANT | 48 PENTA MINOR B5 |
+| 4 PENTATONIC² | 19 ROMAN | 34 MELODIC² | 49 DIMINISHED² (?) |
+| 5 PENTATONIC (V) | 20 GYPSY² | 35 PHRYGIAN DOM | 50 H TONE |
+| 6 PENTATONIC (ION) | 21 HAWAIIAN | 36 DIMINISHED² | 51 (ROMANIAN) MINOR |
+| 7 ARABIC | 22 MELODIC² | 37 TRITONE | 52 ULTRALOC |
+| 8 LYDIAN | 23 HARMONIC² | 38 ALTERED | 53 BLUES HEPTATONIC (?) |
+| 9 LYDIAN AUGMENTED | 24 DIMINISHED² | 39 ROCK N ROLL | 54 2ND MODE T |
+| 10 DORIAN | 25 GYPSY² | 40 WHOLE TONE | 55 3RD MODE |
+| 11 AEOLIAN | 26 LYDIAN b6 | 41 INVERTED (AUG) | 56 4TH MODE |
+| 12 PHRYGIAN | 27 MIXOLIDIAN² | 42 MIXOLIDIAN² | 57 4TH I MODE |
+| 13 JAPANESE | 28 ARABIC (7) | 43 PENTATONIC² | |
+| 14 SPANISH | 29 BLUES² | 44 RITUSEN | |
+
+Files saved before track/project v11 used an older, shorter scale list. The
+firmware remaps those values on load, and the editor will need to port that
+remap.
+
+## 13. Open questions (after capture 102726A)
 
 | # | Open item | Status |
 |---|---|---|
 | 1 | Note payload | ✅ solved, except for padding-like bits (byte 3 bits 1–7; byte 7 on poly notes): preserve them |
-| 2 | Enums | ✅ FX ids, automation types, Math, Roll, track type, port kinds, input mode, TRSP mode, pQuant, signature. Left: scale-id list, pScale-mode list, follow-action/run-mode numbering (manual order assumed), mod-source ids, CV output types |
+| 2 | Enums | ✅ see §12. Left: second-line labels of duplicate scale names, TRIG default, mod-source ids, CV output numbering |
 | 3 | Field order | ✅ project settings mostly; track settings mostly. Left: globals +11/+12, track `@0x18…@0x1e`, `@0x2b`, `@0x14`, `@0x15`, `@0x4a` (live-mode and misc) |
 | 4 | Tempo | ✅ BPM × 10 |
 | 5 | drums/mpe/AFTR | ✅ structure. Left: which curve is pressure vs timbre |
@@ -495,4 +568,3 @@ or a capture.
 
 1. One CV/Gate output track, plus one drum lane routed to a GATE output (output-type branch).
 2. One MPE note recorded with pressure only (curve identity).
-3. pScale mode DOWN and UP, plus two other scales (pScale and scale enums).
