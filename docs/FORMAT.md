@@ -7,6 +7,7 @@ OS 3.22 firmware's own serializers (see `docs/FIRMWARE_NOTES.md`). Sources:
 |---|---|---|
 | `Samples/OS 3.10/OT_REDUX-101026` | 3.10 | original sample |
 | `Samples/OS 3.22/OT_REDUX-101026{A,B,C}` | 3.22 | variations: routings, notes, FX, automation, mod matrix, song |
+| `Samples/OS 3.22/102726A` | 3.22 | targeted capture: tempo, pScale, signature, pQuant, TRSP, routing, note properties, MPE/AFTR/DRUM tracks |
 | `Samples/OS 3.22/settings.dat`, `AUTO.LOAD`, `*.txt` | 3.22 | device-level files |
 | OS 3.22 firmware (not in repo) | 3.22 | save/load code, read with Ghidra |
 
@@ -89,17 +90,26 @@ writer must emit the version the target firmware expects.
 ```
 0f 31                                   project root
 0d 3c                                   globals
-  u16  tempo × 10                       1300 = 130.0 BPM  🟡
-  8 × val8                              [0,0,1,4,2,0,3,0]  🟡 project settings: pSCALE, key,
-                                        scale (@+7, list remapped < v11), signature upper (4) and
-                                        lower (index 2 = /4), STICK, …, TR16 TRSP (order to confirm)
+  u16  tempo × 10                       1300 = 130.0 BPM, 1205 = 120.5 BPM ✅ (taken from the global
+                                        tempo shared by both projects)
+  8 × val8  project settings (default → capture 102726A):
+    +5   pSCALE mode        0 → 3     🟡 0 = OFF … 3 = FILTER (pScale on/off and STICK combined)
+    +6   key                0 → 2     ✅ semitone, 2 = D
+    +7   scale              1 → 10    🟡 scale id (10 = Dorian); list remapped for files < v11
+    +8   signature upper    4 → 7     ✅
+    +9   signature lower    2 → 3     ✅ index into 1/2/4/8 (3 = /8)
+    +10  pQUANT             0 → 3     🔧 index into –– 1/64 1/32 1/24 1/16 (3 = 1/24)
+    +11  ❓                 3         (since v5)
+    +12  ❓                 0         (since v8)
 16 × { u8 track_index; Track }
 u8[16]                                  00 01 … 0f  ❓ (track order / mapping)
 1c 31  u32 n  n × Section               song sections, see §3.7
 1e 31  u32 n  n × SongEntry             song arrangement, see §3.7
-2 × 24 32 { val8 val8 val8 val8 val16 val8 }   [0,1,60,10,0,50] ❓
-16 × 25 31 u32                          all 0 ❓
-18 × 00                                 trailing padding ❓
+2 × 24 32 { val8 val8 val8 val8 val16 val8 }   Project LFO A/B (§11) [0,1,60,10,0,50]
+16 × 25 31 u32 n …                      per-track list of targets (n = 0 in all samples) ❓
+u8[16]                                  per-track byte ❓ (0 in all samples)
+u8 n; n × { Port; u8; u8 }              🔧 ports of MPE tracks (zone?). Capture: {MIDI A}, 0, 15
+                                        (3.10 file: one extra trailing byte)
 ```
 
 ### 3.1 Track (`0c 42` / `0c 43`) 🔧
@@ -110,7 +120,7 @@ The offsets are stable names for the editor even where the meaning is unknown.
 
 ```
 0c 43                           v19 (OS 3.22); v18 in 3.10. Reader accepts ≤ v19
-  val32 @0x0c                   ❓ 0
+  val32 @0x0c                   ✅ TRACK TYPE: 0 POLY, 1 MPE, 2 DRUM (AFTR = MPE + @0x10)
 2c 34  Output (§3.1.1)
 2b 33  Inputs (§3.1.2)
   val8  @0x18                   60 by default; 0/12/24/36 seen  🟡 root note / range
@@ -121,28 +131,30 @@ The offsets are stable names for the editor even where the meaning is unknown.
   val8  @0x1c                   100  ❓
   val8  @0x1e                   127  ❓ (since v17)
   val8  @0x2b                   64  ❓ (since v17)
-  val16 @0x2e                   0  ❓
-  val16 @0x36                   48  🟡 default note LENGTH for new notes (ticks)
+  val16 @0x2e                   0  🟡 signed; −17 after live recording (last µTime?)
+  val16 @0x36                   48  🟡 note LENGTH for new notes (ticks); updated by recording (137)
   val8  @0x3f                   100 🟡 default VELOCITY   val8 @0x40  100 🟡 default CHANCE
   val8  @0x41                   23  🟡 default MATH (OFF) val8 @0x42  0 🟡 default ROLL (OFF)
   val16 @0x48                   10000 ❓
   val8  @0x14                   0/1  ❓
   u8    @0x260                  track index (checked against position on load)
-  u8    @0x261                  ❓ 0/1 (runtime-ish; changes A→B)
+  u8    @0x261                  ✅ MONO EDIT (0/1)
   opt<cstr> @0x264              instrument name ("OCTATRACK")
   val8  @0x4a                   4 ❓
   u16   @0x284                  ❓
   u8    @0x280                  ❓ (track 9: 0 → 1 between A and B)
   opt<cstr> @0x240              instrument definition file name. On load the
                                 firmware re-reads this .txt ("LOADING INSTRUMENT DEF")
-  u8 @0x287, u8 @0x286, u8 @0x289   01 00 00 ❓ (@0x286 since v14, @0x289 since v15)
+  u8 @0x287  pSCALE (track)  ✅ 1 = follow project scale (default)
+  u8 @0x286  pTRSP (track)   ✅ 1 = transposed by track 16      (since v14)
+  u8 @0x289  ❓ 0                                              (since v15)
 16 × PatternHeader (0b 35) @0x2c0 + 0x18·n   §3.2
 FxChain (12 32) @0x458                        §3.3 (includes the 8 CC knob slots)
 LaneTable (2d 33)                             §3.6
 1f 31 … @0xae8                                ❓
 val8 @0x15                                    ❓
 8 × 2a 31 @0x294 + 4·n                        ❓
-[v19] val32 @0x10                             ❓ 0 (new in OS 3.22, maybe AFTR-related)
+[v19] val32 @0x10                             ✅ AFTR flag (1 on AFTR tracks; new in OS 3.22)
 ```
 
 Earlier passes listed "16 values inside the `2b` block". The firmware shows the
@@ -157,22 +169,25 @@ match the serializer exactly.
   val8  midi_channel (0-based)
   u32   output type             0 = MIDI-style port ❓ (other types: CV/gate?)
   if type == 0:
-    Port { u32 kind; u8 index }   kind 0 = MIDI DIN (index 2 bits: A–D)
-                                  kind 1 = USB (index 4 bits)  kind 2 = CV/Gate (index 4 bits)  🟡
+    Port { u32 kind; u8 index }   ✅ kind 0 = MIDI DIN (index 0–3 = A–D)
+                                  ✅ kind 1 = USB DEVICE (index 0–15 = virtual cable 1–16)
+                                  ✅ kind 2 = USB HOST   (index 0–15 = cable 1–16)
     u16   ❓ derived from the port by a lookup (00 0f in all samples)
-  else: u8 (2-bit) + 2 zero bytes
+  else: u8 (2-bit) + 2 zero bytes          CV / gate outputs (not captured yet)
 ```
 
-Sample check: track 9 = `kind 0, index 3` → MIDI D. The Octatrack tracks use
-`kind 1, index 0`, which matches `OUTPORT USBD1` in the instrument definition.
+Checks: track 9 (C) = `kind 0, index 3` → MIDI D. The Octatrack tracks use
+`kind 1, index 0` = `OUTPORT USBD1`. Capture 102726A track 1 = `kind 2, index 3`
+= USB HOST cable 4 ✅.
 
 #### 3.1.2 Inputs (`2b 33`) 🔧
 
 ```
 2b 33
-  val8 ❓
+  val8 input channel (0-based)          ✅ 12 = channel 13
   u32 mode_a ; if mode_a == 2: Port     (always 2 + {kind 2, index 0} in samples ❓)
-  u32 mode_b ; if mode_b == 2: Port     0 / 1 / 2 seen; 2 = specific port + channel 🟡
+  u32 input mode ; if == 2: Port        ✅ 0 = ––, 1 = ALL ACTIVE (default), 2 = this port
+                                        (capture: {kind 0, index 1} = MIDI B)
 ```
 
 The firmware's input-port names, in UI order: `INTERNAL, MIDI IN A, MIDI IN B
@@ -206,11 +221,12 @@ Note data is not here (see §4).
 
 ```
 12 32
-  if track index == 15:  13 32 + val8     🔧 track 16 is special-cased in the serializer
-  else:                  14 31 + val8
+  if track index == 15:  13 32 + val8     🔧 TR16 TRSP mode: 0 = ––, 1 = TRANSPOSE, 2 = MATCH CHORD
+  else:                  14 31 + val8     ❓ (1 in all samples)
   8 × FxSlot                               @+0x400, stride 8
   8 × opt<16 31 Target>                    CC knob assignments (§3.5), @+0x440 stride 0xc
-  val8 @+1, val8 @+2                       0, 100 ❓
+  val8 @+1  QUANTIZE                       🟡 3 (locked by pQuant in the capture)
+  val8 @+2  STRENGTH %                     ✅ 100 default, 57 in the capture
 ```
 
 ```
@@ -340,15 +356,15 @@ Note layout, from 22 notes across 4 tracks:
 | Byte | Payload | Observed | Interpretation |
 |---|---|---|---|
 | 0 | n/a | `08` always | 🔧 event type "note" (the reader stops on anything else) |
-| 1-2 | n/a | 0, 96, **102**, 144 … 672 | 🔧 **u16 start position in ticks, µTime included** (102 = step 2 + 6 ticks). The exporter uses it as-is |
-| 3 | +0 | `00`, `02`, `0c` | 🔧 bit 0 = UI selection flag (cleared by the editor); bits 1–7 ❓ |
+| 1-2 | n/a | 0, 96, **102**, 144 … 672 | ✅ **u16 start position in ticks, µTime included** (capture: µTime +8 % → position 4) |
+| 3 | +0 | `00`, `02`, `0c`, `b0`, `94` | 🔧 bit 0 = UI selection flag; other bits look like **uninitialised padding** (random on recorded and drum notes). Preserve |
 | 4 | +1 | 0–127 | 🔧 **pitch**. Bit 7 set ⇒ note skipped on export (disabled flag) |
 | 5 | +2 | `64`, `7f` | 🔧 **velocity** |
 | 6 | +3 | `00`; `64` on the recorded chord | 🔧 **note-off (release) velocity** |
-| 7 | +4 | `00` | ❓ |
-| 8 | +5 | `64`, `4e` | **chance %** (default 100) |
-| 9 | +6 | `16`, `17`, `18` | 🔧 **Math condition index**: 23 = OFF (default), 22 = FILL, 24 = `1:2` (see FIRMWARE_NOTES §8) |
-| 10 | +7 | `00`, `01` | 🟡 **Roll index**: 0 = OFF, 1 = 1/8 … 10 = 1/256 |
+| 7 | +4 | `00`, `60`; drums `06`/`07` | ✅ **drum lane** on drum tracks; on poly notes apparently padding (`60` on some notes). Preserve |
+| 8 | +5 | `64`, `4e`, `4a` | ✅ **chance %** (default 100; capture 74) |
+| 9 | +6 | `16`, `17`, `18`, `42` | ✅ **Math condition index**: 23 = OFF (default), 22 = FILL, 24 = `1:2`, 66 = FX IF FILL (capture). Table in FIRMWARE_NOTES §8 |
+| 10 | +7 | `00`, `01`, `03` | ✅ **Roll index**: 0 = OFF, 1 = 1/8, 2 = 1/12, 3 = 1/16 (capture) … 10 = 1/256 |
 | 11-12 | +8 | `30 00`, `90 00`, `00 03` | 🔧 **u16 length in ticks** (48 = 1 step). The exporter writes note-off at start + length |
 
 Timing: **192 PPQN, 48 ticks per 16th step** ✅ (manual: ×48 maximum zoom;
@@ -376,19 +392,26 @@ Recorded lanes contain up to about 100 points per pattern. There are 17
 PointLists per lane where 16 patterns would be expected; the extra one may be
 a "lane default". ❓
 
-## 6. `drums.dat` / `mpe.dat` 🔧 structure (no non-empty sample yet)
+## 6. `drums.dat` / `mpe.dat` ✅ (capture 102726A)
 
 ```
 drums.dat:  06 32 · u8 track_count · { u8 track · u8 pattern_count · { u8 pattern · DrumList } }
 DrumList  = 02 32 · u32 count · count × { u16 position; u8[10] payload }   (no 08 type byte)
 
 mpe.dat:    26 32 · same nesting · MpeList
-MpeList   = 27 31 · u32 count · count × { 08; u16 position; 29 31 · u8[10] payload · 3 × curve }
+MpeList   = 27 31 · u32 count · count × { 08; u16 position; 29 31 · u8[10] payload · 3 × Curve }
+Curve     = 28 32 · u8 flag · u32 n · n × { u16 position; u16 value }
 ```
 
-The three curves are the MPE expressions (likely pitch, pressure, timbre).
-AFTR tracks have no file of their own, so their per-note pressure is most
-likely stored here as well. A capture is needed before *writing* these files.
+- **Drum events** use the note payload with **byte 7 = lane index** (the capture
+  alternates lanes 7 and 6). Byte 4 (pitch) is 0, and the release velocity
+  defaults to 100.
+- **MPE and AFTR notes** both live in `mpe.dat`. An AFTR track is an MPE-type
+  track with the v19 AFTR flag set (§3.1). A hand-placed note gets three
+  one-point curves, in file order: **8192** (pitch bend centre), **110** and **64**.
+  Which of pressure and timbre is which is still 🟡.
+- Live recording can store **exact duplicate notes** (ten identical notes at
+  one position in the capture). Readers and editors must tolerate them.
 
 ## 7. Runtime state is saved too
 
@@ -456,24 +479,20 @@ or a capture.
 | AFTR | new track type after MPE; single channel; per-note pressure curves | no separate file in firmware ⇒ probably `mpe.dat`-style curves 📖 |
 | Settings | saved only when the user selects SAVE in settings | explains `settings.dat` carrying older class versions ✅; the `21`/`22` tail = **colour palette** (`palette_serde.cpp`) 📖 |
 
-## 12. Open questions after the manual and the second firmware pass
+## 12. Open questions (after capture 102726A)
 
-| # | Open item | Status / best source |
+| # | Open item | Status |
 |---|---|---|
-| 1 | Note payload | **mostly solved** (§4). Left: byte 7, bits 1–7 of byte 3; confirm roll at byte 10 |
-| 2 | Enum numbering | **FX ids, automation types (CC/AT/PB/PC), Math and Roll solved**. Left: track type, output kinds, mod-source ids, scales, follow actions, run modes |
-| 3 | Order of the 8 project globals and the live/quantize track fields (`@0x18…@0x2e`) | defaults narrow it down; one capture confirms |
-| 4 | Tempo scale (×10 or ×100) | one capture |
-| 5 | `drums.dat`, `mpe.dat`, AFTR | **structure solved** (§6). Payload meaning for drums (lane index?) and curve format need one capture each |
-| 6 | Capacity | **no fixed limits**: shared RAM arena. The editor needs a memory estimate (arena size still to find) |
-| 7 | Minor classes `1f`, `25`, `28`, `2a` and runtime flags | preserve as-is |
+| 1 | Note payload | ✅ solved, except for padding-like bits (byte 3 bits 1–7; byte 7 on poly notes): preserve them |
+| 2 | Enums | ✅ FX ids, automation types, Math, Roll, track type, port kinds, input mode, TRSP mode, pQuant, signature. Left: scale-id list, pScale-mode list, follow-action/run-mode numbering (manual order assumed), mod-source ids, CV output types |
+| 3 | Field order | ✅ project settings mostly; track settings mostly. Left: globals +11/+12, track `@0x18…@0x1e`, `@0x2b`, `@0x14`, `@0x15`, `@0x4a` (live-mode and misc) |
+| 4 | Tempo | ✅ BPM × 10 |
+| 5 | drums/mpe/AFTR | ✅ structure. Left: which curve is pressure vs timbre |
+| 6 | Capacity | shared RAM arena; size still to find |
+| 7 | Minor classes `1f`, `25`, `2a`, the per-track tail byte | preserve as-is |
 
-### Captures still needed (much shorter now)
+### Captures still worth doing (optional)
 
-One project, saved after each step, is enough:
-
-1. Tempo 120.50; time signature 7/8; pSCALE on with a non-default key and scale.
-2. One track: DRUM type with 2 hits in 2 lanes (one lane with OUTPUT = CH 10);
-   one MPE track and one AFTR track, each with a single recorded note.
-3. One poly note with every property non-default: length 3 steps + 5 ticks,
-   µTime +25 %, chance 50 %, roll 1/32, math 2:3.
+1. One CV/Gate output track, plus one drum lane routed to a GATE output (output-type branch).
+2. One MPE note recorded with pressure only (curve identity).
+3. pScale mode DOWN and UP, plus two other scales (pScale and scale enums).

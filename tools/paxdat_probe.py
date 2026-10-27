@@ -246,10 +246,14 @@ def parse_project(data):
     for _ in range(16):
         r.tag(0x25, 1)
         out["u_25"].append(r.u32())
-    rest = r.raw(len(data) - r.p)
-    if any(rest):
-        r.fail("non-zero trailing bytes")
-    out["trailing_zero_bytes"] = len(rest)
+    out["u_per_track"] = list(r.raw(16))
+    # Port list collected from MPE tracks: Port{u32 kind; u8 index} + u8 + u8 (zone channel range?)
+    out["mpe_ports?"] = []
+    for _ in range(r.u8()):
+        kind = r.u32()
+        out["mpe_ports?"].append({"kind": kind, "index": r.u8(), "u_a": r.u8(), "u_b": r.u8()})
+    if not r.eof():
+        r.fail("unconsumed bytes at end of project.dat")
     return out
 
 
@@ -316,6 +320,73 @@ def parse_autom(data):
     return out
 
 
+def decode_payload(b):
+    """10-byte note payload shared by notes/drums/mpe (FORMAT.md §4)."""
+    return {
+        "u_flags": b[0],
+        "pitch": b[1] & 0x7F,
+        "velocity": b[2],
+        "release_velocity": b[3],
+        "u_byte4 (drum lane / 0x60 flags?)": b[4],
+        "chance": b[5],
+        "math": b[6] - MATH_OFF,
+        "roll": ROLL[b[7]] if b[7] < len(ROLL) else b[7],
+        "length": b[8] | b[9] << 8,
+    }
+
+
+def parse_nested(r, item_list):
+    """track_count { track, pattern_count { pattern, <list> } } as used by notes/drums/mpe."""
+    out = []
+    for _ in range(r.u8()):
+        trk = {"track": r.u8(), "patterns": []}
+        for _ in range(r.u8()):
+            trk["patterns"].append({"pattern": r.u8(), "events": item_list(r)})
+        out.append(trk)
+    if not r.eof():
+        r.fail("unconsumed bytes")
+    return {"tracks": out}
+
+
+def parse_drums(data):
+    r = Reader(data, "drums.dat")
+    r.tag(0x06, 2)
+
+    def drum_list(r):
+        r.tag(0x02, 2)
+        evs = []
+        for _ in range(r.u32()):
+            pos = r.u16()
+            evs.append({"position": pos, **decode_payload(r.raw(10))})
+        return evs
+    return parse_nested(r, drum_list)
+
+
+def parse_mpe(data):
+    r = Reader(data, "mpe.dat")
+    r.tag(0x26, 2)
+
+    def curve(r):
+        r.tag(0x28, 2)
+        flag = r.u8()
+        return {"u_flag": flag, "points": [(r.u16(), r.u16()) for _ in range(r.u32())]}
+
+    def mpe_list(r):
+        r.tag(0x27, 1)
+        evs = []
+        for _ in range(r.u32()):
+            if r.u8() != 0x08:
+                r.p -= 1
+                r.fail("expected note event 0x08")
+            pos = r.u16()
+            r.tag(0x29, 1)
+            ev = {"position": pos, **decode_payload(r.raw(10))}
+            ev["curves (file order)"] = [curve(r) for _ in range(3)]
+            evs.append(ev)
+        return evs
+    return parse_nested(r, mpe_list)
+
+
 def parse_empty(name, cls):
     def f(data):
         r = Reader(data, name)
@@ -356,8 +427,8 @@ PARSERS = {
     "project.dat": parse_project,
     "notes.dat": parse_notes,
     "autom.dat": parse_autom,
-    "drums.dat": parse_empty("drums.dat", 0x06),
-    "mpe.dat": parse_empty("mpe.dat", 0x26),
+    "drums.dat": parse_drums,
+    "mpe.dat": parse_mpe,
 }
 
 
