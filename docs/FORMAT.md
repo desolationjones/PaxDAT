@@ -525,28 +525,25 @@ stored value.
 HARMO, LFO, RANDOM, SCALER, SWING, ENV, OUTPUT, ECHO, __COLLECT, REGISTER,
 __MUTATE, SHAPER, MONO, ARPOLY, SPRING) matches the factory ids.
 
-**Scale** (global +7). Order from the firmware's scale objects, which are built
-in index order. **10 = DORIAN** ✅. Names marked ² appear more than once; the
-device shows a second label line to tell them apart, still to be read off the
-device.
+**Scale** (global +7; track `@0x19`), 67 values, 0–66. Order from the firmware's
+scale objects. Colour groups and duplicate disambiguation are from the manual
+§2.7 and the device's colour/scale encoders. ✅ 10 = DORIAN (capture). ✅ The
+maximum, 66, equals the firmware's migration clamp. 58–66 are 🟡 (manual only).
 
-| | | | |
-|---|---|---|---|
-| 0 CHROMATIC | 15 PENTATONIC² | 30 PENTATONIC² | 45 DORIAN (B2) |
-| 1 MAJOR | 16 PENTA (DORIAN) | 31 PENTA (IV) | 46 HALF DIMINISHED |
-| 2 HARMONIC² | 17 PENTA (PELOG) | 32 PENTA (D II) | 47 LOCRIAN |
-| 3 AUGMENTED | 18 BLUES² | 33 LYDIAN DOMINANT | 48 PENTA MINOR B5 |
-| 4 PENTATONIC² | 19 ROMAN | 34 MELODIC² | 49 DIMINISHED² (?) |
-| 5 PENTATONIC (V) | 20 GYPSY² | 35 PHRYGIAN DOM | 50 H TONE |
-| 6 PENTATONIC (ION) | 21 HAWAIIAN | 36 DIMINISHED² | 51 (ROMANIAN) MINOR |
-| 7 ARABIC | 22 MELODIC² | 37 TRITONE | 52 ULTRALOC |
-| 8 LYDIAN | 23 HARMONIC² | 38 ALTERED | 53 BLUES HEPTATONIC (?) |
-| 9 LYDIAN AUGMENTED | 24 DIMINISHED² | 39 ROCK N ROLL | 54 2ND MODE T |
-| 10 DORIAN | 25 GYPSY² | 40 WHOLE TONE | 55 3RD MODE |
-| 11 AEOLIAN | 26 LYDIAN b6 | 41 INVERTED (AUG) | 56 4TH MODE |
-| 12 PHRYGIAN | 27 MIXOLIDIAN² | 42 MIXOLIDIAN² | 57 4TH I MODE |
-| 13 JAPANESE | 28 ARABIC (7) | 43 PENTATONIC² | |
-| 14 SPANISH | 29 BLUES² | 44 RITUSEN | |
+| Colour | Index: scale |
+|---|---|
+| – | 0 CHROMATIC (not offered for pScale) |
+| MAJ | 1 MAJOR · 2 HARMONIC · 3 AUGMENTED · 4 PENTATONIC · 5 PENTATONIC (V) · 6 PENTATONIC (ION) · 7 ARABIC · 8 LYDIAN · 9 LYDIAN AUGMENTED |
+| MIN | 10 DORIAN · 11 AEOLIAN · 12 PHRYGIAN · 13 JAPANESE · 14 SPANISH · 15 PENTATONIC (minor) · 16 PENTA (DORIAN) · 17 PENTA (PELOG) · 18 BLUES (minor) · 19 ROMANIAN · 20 GYPSY b7 · 21 HAWAIIAN · 22 MELODIC (minor) · 23 HARMONIC (minor) · 24 DIMINISHED (minor) · 25 GYPSY · 26 LYDIAN b6 |
+| DOMI | 27 MIXOLYDIAN · 28 ARABIC (7) · 29 BLUES (dominant) · 30 PENTATONIC (dominant) · 31 PENTA (IV) · 32 PENTA (D II) · 33 LYDIAN DOMINANT · 34 MELODIC MAJOR · 35 PHRYGIAN DOMINANT · 36 DIMINISHED (dominant) · 37 TRITONE · 38 ALTERED · 39 ROCK N ROLL · 40 WHOLE TONE · 41 INVERTED (AUG) |
+| SUS | 42 MIXOLYDIAN (sus) · 43 PENTATONIC (sus) · 44 RITUSEN · 45 DORIAN (b2) |
+| HALF | 46 HALF DIMINISHED · 47 LOCRIAN · 48 PENTA MINOR b5 |
+| DIMI | 49 DIMINISHED · 50 HALF TONE · 51 ROMANIAN (minor) · 52 ULTRALOCRIAN · 53 BLUES HEPTATONIC |
+| MESS | 54 2ND MODE T · 55 3RD MODE · 56 4TH MODE · 57 4TH I MODE · 58 5TH MODE · 59 5TH I MODE · 60 6TH MODE · 61 6TH I MODE |
+| INT | 62 MINOR THIRDS · 63 MAJOR THIRDS · 64 FOURTHS · 65 FIFTH OCTAVE · 66 OCTAVE |
+
+The colour isn't stored: it's derived from the scale index. **Key** (global +6)
+is the root, 0 = C … 11 = B.
 
 Files saved before track/project v11 used an older, shorter scale list. The
 firmware remaps those values on load, and the editor will need to port that
@@ -557,7 +554,7 @@ remap.
 | # | Open item | Status |
 |---|---|---|
 | 1 | Note payload | ✅ solved, except for padding-like bits (byte 3 bits 1–7; byte 7 on poly notes): preserve them |
-| 2 | Enums | ✅ see §12. Left: second-line labels of duplicate scale names, TRIG default, mod-source ids, CV output numbering |
+| 2 | Enums | ✅ see §12. Left: TRIG default, mod-source ids, CV output numbering |
 | 3 | Field order | ✅ project settings mostly; track settings mostly. Left: globals +11/+12, track `@0x18…@0x1e`, `@0x2b`, `@0x14`, `@0x15`, `@0x4a` (live-mode and misc) |
 | 4 | Tempo | ✅ BPM × 10 |
 | 5 | drums/mpe/AFTR | ✅ structure. Left: which curve is pressure vs timbre |
