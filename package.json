@@ -1,0 +1,16 @@
+{
+  "name": "paxdat",
+  "private": true,
+  "description": "Offline editor and inspector for Squarp Hapax project files",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "test": "npm run test -w @paxdat/core",
+    "typecheck": "tsc --noEmit -p packages/core && tsc --noEmit -p packages/cli && tsc --noEmit -p apps/web",
+    "dev": "npm run dev -w @paxdat/web",
+    "build": "npm run build -w @paxdat/web",
+    "paxdat": "npm run --silent cli -w @paxdat/cli --"
+  }
+}

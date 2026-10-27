@@ -319,9 +319,12 @@ and CV destinations use other ids, not yet mapped.
   u8 ❓
 ```
 
-These are written from the highest lane to the lowest. They match the
-`ROW:TRIG:CHAN:NOTE NAME` syntax in the instrument `.txt` files:
-`8:NULL:8:43 TRACK 8` → `2b 07 01 …`.
+They match the `ROW:TRIG:CHAN:NOTE NAME` syntax in the instrument `.txt` files:
+`8:NULL:8:43 TRACK 8` → `2b 07 01 …`. **Drum events reference a lane by its
+index in this list** (byte 7 of the payload). 🟡 Index 0–7 = rows 8…1 of the
+first page (index 7 = row 1 = KICK by default; capture 102726A alternates
+index 7 on the beat and 6 on the off-beat, i.e. KICK/SNARE), index 8–15 = rows
+16…9.
 
 ### 3.7 Song mode ✅ structure, 🟡 meaning
 
@@ -403,8 +406,8 @@ MpeList   = 27 31 · u32 count · count × { 08; u16 position; 29 31 · u8[10] p
 Curve     = 28 32 · u8 flag · u32 n · n × { u16 position; u16 value }
 ```
 
-- **Drum events** use the note payload with **byte 7 = lane index** (the capture
-  alternates lanes 7 and 6). Byte 4 (pitch) is 0, and the release velocity
+- **Drum events** use the note payload with **byte 7 = lane index** into the
+  lane table (§3.6). The capture alternates 7 (KICK, row 1) and 6 (SNARE, row 2) 🟡. Byte 4 (pitch) is 0, and the release velocity
   defaults to 100.
 - **MPE and AFTR notes** both live in `mpe.dat`. An AFTR track is an MPE-type
   track with the v19 AFTR flag set (§3.1). A hand-placed note gets three

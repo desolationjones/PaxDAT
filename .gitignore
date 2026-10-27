@@ -5,3 +5,14 @@ re-work/
 
 # Windows download markers
 *:Zone.Identifier
+
+# Node / build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local test projects (not committed until a golden set exists)
+Samples/
+
+# Python
+__pycache__/

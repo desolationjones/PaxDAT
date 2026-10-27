@@ -189,6 +189,13 @@ The device is the final oracle, so verification works on several levels:
 
 Phase 0 needs no further reverse engineering and can start immediately.
 
+**Phase 0 status (2026-10-27): implemented.**
+- `packages/core`: codec with a writer for every structure. Golden round-trip
+  tests pass byte-identically on all local samples (OS 3.10 and 3.22),
+  cross-checked against the Python probe.
+- `packages/cli`: `inspect`, `diff`, `roundtrip`.
+- `apps/web`: React inspector, verified in headless Firefox against the samples.
+
 ## 6. Repository layout (proposed)
 
 ```
